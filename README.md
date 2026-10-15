@@ -28,6 +28,7 @@ From a terminal on your own computer:
 
 ```bash
 ssh <caseID>@markov.case.edu
+module load git/2.50.1-GCCcore-14.3.0
 git clone https://github.com/lboskovic7/csds347-multilingual-safety.git ~/project
 cd ~/project
 ```
@@ -275,6 +276,22 @@ ls -lh /mnt/vstor/courses/csds447/team5/outputs/
 
 A job showing `Pending` with reason `AssocGrpGRES` means the class's GPUs are all in use. It
 starts on its own when one frees up.
+
+## 9. Demo: every model on every dataset (about 8 minutes)
+
+Inside a GPU session (the `srun` and setup lines from step 8), this runs all three models on one
+prompt per language and label from each dataset: 15 prompts per model.
+
+```bash
+for m in $(cat models.txt); do for d in jbb multijail xstest flores; do python run_baseline.py --model $m --dataset $d --split both --languages zh --limit 1 --out_dir $OUT $( [ $d = multijail ] && echo "--languages en zh it vi ar ko th bn sw jv" ); done; done
+```
+
+It writes 12 files to the outputs folder, one per model and dataset. List them with:
+
+```bash
+ls -lh $OUT
+```
+
 
 ## Storage and etiquette
 
