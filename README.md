@@ -203,7 +203,10 @@ python run_baseline.py --model Qwen/Qwen2.5-7B-Instruct --dataset xstest --limit
 python run_baseline.py --model Qwen/Qwen2.5-7B-Instruct --dataset flores --languages zh --limit 3 --out_dir $OUT
 exit
 ```
-
+To check outputs
+```
+ls -lh /mnt/vstor/courses/csds447/team5/outputs/
+```
 Type `exit` as soon as it finishes. An idle session still holds one of the class's 6 GPUs.
 The FLORES+ line only works for languages you have downloaded (step 6).
 
