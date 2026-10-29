@@ -221,7 +221,8 @@ def main():
     ap.add_argument("--out_dir", default=os.path.join(BASE, "outputs"))
     ap.add_argument("--limit", type=int, default=None, help="max prompts per language and label")
     ap.add_argument("--batch_size", type=int, default=16)
-    ap.add_argument("--max_new_tokens", type=int, default=256)
+    ap.add_argument("--max_new_tokens", type=int, default=150,
+                    help="150 = JailbreakBench and Backtranslation paper setting")
     args = ap.parse_args()
 
     df, name = load_prompts(args)

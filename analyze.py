@@ -39,7 +39,7 @@ def load(judged_dir):
     # Llama Guard input/output filter defense, derived from the vanilla responses
     v = df[df["defense"] == "none"].copy()
     if "lg_input_flag" in v:
-        blocked = v["lg_input_flag"].fillna(False).astype(bool) | v["lg_output_flag"].fillna(False).astype(bool)
+        blocked = v["lg_input_flag"].eq(True) | v["lg_output_flag"].eq(True)
         v["unsafe"] = v["unsafe"] & ~blocked
         v["refused"] = v["refused"] | blocked
         v["defense"] = "llamaguard_filter"
