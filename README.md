@@ -1,4 +1,4 @@
-# Multilingual Safety of LLMs: Setup and Baselines
+# Multilingual Safety of LLMs: Baselines and Evaluation
 
 CSDS 347, Team 5: Luka Boskovic (lxb451), Jiye Yong (jxy1203)
 
@@ -7,9 +7,14 @@ CSDS 347, Team 5: Luka Boskovic (lxb451), Jiye Yong (jxy1203)
 | File | Purpose |
 | --- | --- |
 | `setup_markov.sh` | One-time environment setup on Markov (comments inside explain each step) |
-| `run_baseline.py` | Runs one model on one dataset (JBB, MultiJail, XSTest, FLORES+ or any CSV) and saves its responses |
-| `run_models.sh` | Slurm batch job that runs `run_baseline.py` for every model in `models.txt` |
+| `run_baseline.py` | Runs one model with one defense (none, Self-Reminder, Backtranslation) on one dataset and saves its responses |
+| `translate.py` | NLLB-200 translation: validation on FLORES+, and translating responses into English for the judge |
+| `judge.py` | Jailbreak judges (keyword lists, Llama Guard 3): validation on human labels, and labeling every response |
+| `analyze.py` | Builds all result tables and plots into `results/` |
+| `common.py` | Shared helpers, including the published keyword lists copied from the authors' code |
+| `jobs/` | Slurm batch jobs: `generate.sh`, `validate.sh`, `evaluate.sh` |
 | `models.txt` | The three models we evaluate, one per line |
+| `results/` | Committed results: `summary.md` (all tables), CSVs and plots |
 
 ## Requirements
 
@@ -17,8 +22,9 @@ CSDS 347, Team 5: Luka Boskovic (lxb451), Jiye Yong (jxy1203)
 - **GPU:** one NVIDIA GPU with at least 24 GB of memory. We use the RTX 4090 (24 GB) or L40S (48 GB).
   The 7–9B models need about 15–18 GB in bfloat16. The `gpu2080` and `gpu2h100` types are too small.
 - **Python:** 3.9 or newer (Markov's `python3` works).
-- **Python packages:** `torch`, `transformers`, `accelerate`, `datasets`, `pandas`, installed by `setup_markov.sh`.
-- **Storage:** about 47 GB for models and 7 GB for the Python environment, kept in course space
+- **Python packages:** `torch`, `transformers`, `accelerate`, `datasets`, `pandas`, `sacrebleu`, `sentencepiece`,
+  `py3langid`, `matplotlib`, `tabulate`, installed by `setup_markov.sh`.
+- **Storage:** about 65 GB for models (3 target models, Llama Guard 3, NLLB-200) and 7 GB for the Python environment, kept in course space
   (`/mnt/vstor/courses/csds447/team5`), not in the 25 GB home directory.
 - **Hugging Face account** with an access token (Settings → Access Tokens → Read).
 
@@ -52,6 +58,13 @@ and add the cache location to your own `~/.bashrc` instead:
 echo 'export HF_HOME=/mnt/vstor/courses/csds447/team5/hf_cache' >> ~/.bashrc
 ```
 
+If the environment was built before the evaluation code was added, install the new packages once:
+
+```bash
+source /mnt/vstor/courses/csds447/team5/venv/bin/activate
+pip install sacrebleu sentencepiece py3langid==0.3.0 matplotlib tabulate
+```
+
 Both teammates should also add this line, so files either of you creates (downloads, outputs)
 can be written by the other. Then log out and back in:
 
@@ -70,11 +83,12 @@ export HF_HOME=/mnt/vstor/courses/csds447/team5/hf_cache
 
 ## 4. Log in to Hugging Face
 
-Two models and two datasets are gated. Accept their terms on Hugging Face first, using the same
+Three models and two datasets are gated. Accept their terms on Hugging Face first, using the same
 account as your token:
 
 - [meta-llama/Llama-3.1-8B-Instruct](https://huggingface.co/meta-llama/Llama-3.1-8B-Instruct) (fill in the form; approval can take a little while)
 - [google/gemma-2-9b-it](https://huggingface.co/google/gemma-2-9b-it)
+- [meta-llama/Llama-Guard-3-8B](https://huggingface.co/meta-llama/Llama-Guard-3-8B) (the judge)
 - [walledai/XSTest](https://huggingface.co/datasets/walledai/XSTest)
 - [openlanguagedata/flores_plus](https://huggingface.co/datasets/openlanguagedata/flores_plus)
 
@@ -94,6 +108,8 @@ Run these on the login node. Downloading needs internet but no GPU.
 hf download Qwen/Qwen2.5-7B-Instruct
 hf download google/gemma-2-9b-it
 hf download meta-llama/Llama-3.1-8B-Instruct --exclude "original/*"
+hf download meta-llama/Llama-Guard-3-8B --exclude "original/*"
+hf download facebook/nllb-200-distilled-1.3B
 ```
 
 The `--exclude` skips a second 16 GB copy of Llama in Meta's own format, which `transformers` does not use.
@@ -103,8 +119,10 @@ The `--exclude` skips a second 16 GB copy of Llama in Meta's own format, which `
 | [Qwen2.5-7B-Instruct](https://huggingface.co/Qwen/Qwen2.5-7B-Instruct) | 7B | 15 GB | Alibaba |
 | [Llama-3.1-8B-Instruct](https://huggingface.co/meta-llama/Llama-3.1-8B-Instruct) | 8B | 15 GB | Meta |
 | [gemma-2-9b-it](https://huggingface.co/google/gemma-2-9b-it) | 9B | 18 GB | Google |
+| [Llama-Guard-3-8B](https://huggingface.co/meta-llama/Llama-Guard-3-8B) (judge) | 8B | 15 GB | Meta |
+| [NLLB-200-distilled-1.3B](https://huggingface.co/facebook/nllb-200-distilled-1.3B) (translator) | 1.3B | 5 GB | Meta |
 
-All three are open-weight, instruction-tuned and safety-aligned. We need open weights because our
+The first three are the models we evaluate: open-weight, instruction-tuned and safety-aligned. We need open weights because our
 analysis looks at the models' internal activations, not only their text output.
 
 ## 6. Download the datasets
@@ -113,17 +131,25 @@ Also on the login node:
 
 ```bash
 python -c "from datasets import load_dataset as L; L('JailbreakBench/JBB-Behaviors','behaviors')"
+python -c "from datasets import load_dataset as L; L('JailbreakBench/JBB-Behaviors','judge_comparison')"
 python -c "from datasets import load_dataset as L; L('DAMO-NLP-SG/MultiJail')"
 python -c "from datasets import load_dataset as L; L('walledai/XSTest')"
 python -c "from datasets import load_dataset as L; [L('openlanguagedata/flores_plus', c) for c in ['eng_Latn','cmn_Hans','ita_Latn','vie_Latn','arb_Arab','kor_Hang','tha_Thai','ben_Beng','swh_Latn','jav_Latn']]"
 ```
 
-| Dataset | Role | Size | Splits | Key attributes |
+| Dataset | Role in the pipeline | Size | Splits | Key attributes |
 | --- | --- | --- | --- | --- |
-| [JBB-Behaviors](https://huggingface.co/datasets/JailbreakBench/JBB-Behaviors) | English test set for the pipeline | 200 prompts | `harmful` (100), `benign` (100) | `Goal` (the prompt), `Target` (an affirmative response), `Category` (10 harm types) |
-| [MultiJail](https://huggingface.co/datasets/DAMO-NLP-SG/MultiJail) | Main harmful prompts across languages | 315 prompts × 10 languages | none (one `train` split, used in full) | one column per language (`en`, `zh`, `it`, `vi`, `ar`, `ko`, `th`, `bn`, `sw`, `jv`), `tags` (harm categories) |
-| [XSTest](https://huggingface.co/datasets/walledai/XSTest) | Over-refusal: safe prompts that look unsafe | 450 prompts | none | `prompt`, `label` (250 safe, 200 unsafe), `type` |
-| [FLORES+](https://huggingface.co/datasets/openlanguagedata/flores_plus) | Benign comprehension check (translation into English) | ~2,000 sentences per language | `dev` (997), `devtest` (1,012) | `text`, `id` (same `id` = same sentence across languages), language codes |
+| [JBB `judge_comparison`](https://huggingface.co/datasets/JailbreakBench/JBB-Behaviors) | **Validate the judge** against human labels | 300 responses | one split, used in full | `goal`, `prompt`, `target_response`, `human1-3`, `human_majority` (jailbroken or not), labels of 4 published judges |
+| [FLORES+](https://huggingface.co/datasets/openlanguagedata/flores_plus) | **Validate the translator** against human reference translations | 1,012 sentences per language | `devtest` (validation), `dev` | `text`, `id` (same `id` = same sentence in every language) |
+| [MultiJail](https://huggingface.co/datasets/DAMO-NLP-SG/MultiJail) | **Main experiment**: the same harmful requests in 10 languages | 315 prompts × 10 languages | none (one `train` split, used in full) | one column per language (`en` … `jv`), `tags` (harm categories) |
+| [XSTest](https://huggingface.co/datasets/walledai/XSTest) | **Over-refusal**: safe prompts that look unsafe (cost of a defense) | 450 prompts | none | `prompt`, `label` (250 safe, 200 unsafe), `type` |
+| [JBB-Behaviors](https://huggingface.co/datasets/JailbreakBench/JBB-Behaviors) | **English harmful + benign** pairs (ASR and over-refusal) | 200 prompts | `harmful` (100), `benign` (100) | `Goal` (the prompt), `Category` (10 harm types) |
+
+**How the datasets fit together.** We cannot hand-label thousands of responses in 10 languages,
+so we use an automatic judge (Llama Guard 3) on English translations of the responses, which is
+the MultiJail paper's protocol (they used Google Translate and GPT-4). Before trusting either
+tool we validate it on data with human labels: the judge on JBB `judge_comparison`, the
+translator on FLORES+. Only then do we apply them to MultiJail, XSTest and JBB.
 
 **Attributes that matter for our safety property.** The key attribute is the **language of the
 prompt** and its **resource level**, as grouped by MultiJail:
@@ -150,10 +176,11 @@ Models (expect three `OK` lines):
 HF_HUB_OFFLINE=1 python -c "from transformers import AutoConfig as C, AutoTokenizer as T; [print('OK', m, C.from_pretrained(m).model_type) for m in ['Qwen/Qwen2.5-7B-Instruct','meta-llama/Llama-3.1-8B-Instruct','google/gemma-2-9b-it']]"
 ```
 
-Datasets, one command each (expect 100 + 100, 315 and 450 rows):
+Datasets, one command each (expect 100 + 100, 300, 315 and 450 rows):
 
 ```bash
 HF_HUB_OFFLINE=1 python -c "from datasets import load_dataset as L; print(L('JailbreakBench/JBB-Behaviors','behaviors'))"
+HF_HUB_OFFLINE=1 python -c "from datasets import load_dataset as L; print(L('JailbreakBench/JBB-Behaviors','judge_comparison'))"
 HF_HUB_OFFLINE=1 python -c "from datasets import load_dataset as L; print(L('DAMO-NLP-SG/MultiJail'))"
 HF_HUB_OFFLINE=1 python -c "from datasets import load_dataset as L; print(L('walledai/XSTest'))"
 ```
@@ -171,12 +198,30 @@ empty lock file you cannot write. When nobody is downloading, delete them and re
 rm -f /mnt/vstor/courses/csds447/team5/hf_cache/datasets/*.lock
 ```
 
-## 8. Run the baseline
+## 8. Baselines
 
-The baseline is each model answering the prompts as-is, with no defense. Later experiments
-(defenses, dialects) are compared against it.
+Every baseline runs on every model (Qwen2.5-7B, Llama-3.1-8B, Gemma-2-9B) and every dataset
+(MultiJail, XSTest, JBB). Code from the original authors is reused verbatim where it exists:
+prompts, keyword lists, thresholds and decision logic are copied, and only the model calls are
+adapted to our models' chat templates.
 
-### Quick test (interactive, a few minutes)
+**Defenses** (what a deployer does to stop jailbreaks):
+
+| Defense | Type | Source | What it does |
+| --- | --- | --- | --- |
+| None | Vanilla | – | The model as-is, default chat template, greedy decoding |
+| Self-Reminder | SOTA | Xie et al. 2023, *Nature Machine Intelligence*; text from `llm-jailbreaking-defense` | Adds a "be a responsible language model" system prompt and reminder around the query |
+| Backtranslation | SOTA | Wang et al. 2024, *ACL Findings* (our ref. [9]); logic from the authors' `llm-jailbreaking-defense` | Asks the model to guess the request behind its own answer; refuses if the model refuses that guessed request. Likelihood threshold −2.0, 150-token lengths, as in the paper. The target model does the backtranslation. Run on the first 50 MultiJail prompts per language (it costs 2–3 generations per prompt) |
+| Llama Guard filter | SOTA / off-the-shelf guardrail | Meta, Llama Guard 3 | Blocks the answer if Llama Guard flags the prompt (input filter) or the response (output filter), on the original-language text |
+
+**Judges** (how we decide a response is a jailbreak):
+
+| Judge | Type | Source |
+| --- | --- | --- |
+| Refusal keywords | Vanilla | GCG (Zou et al. 2023) list and JailbreakBench `StringClassifier`: jailbroken if no refusal phrase |
+| Llama Guard 3 8B | SOTA | Meta model card usage; applied to the English translation of each response (MultiJail protocol) |
+
+## 9. Quick test (a few minutes, interactive)
 
 Request one GPU:
 
@@ -184,117 +229,76 @@ Request one GPU:
 srun -A csds447 -p markov_gpu -C "gpu4090|gpul40s" --gres=gpu:1 -c 4 --mem=32G -t 00:30:00 --pty bash
 ```
 
-When the prompt shows a GPU node instead of the login node, set up the session:
+On the GPU node:
 
 ```bash
 cd ~/project
 source /mnt/vstor/courses/csds447/team5/venv/bin/activate
 export HF_HOME=/mnt/vstor/courses/csds447/team5/hf_cache HF_HUB_OFFLINE=1
-OUT=/mnt/vstor/courses/csds447/team5/outputs
-```
-
-Then run the model on a few prompts from each dataset (`--limit 3` = 3 prompts per language
-and per safe/unsafe label):
-
-```bash
-python run_baseline.py --model Qwen/Qwen2.5-7B-Instruct --dataset jbb --split both --limit 3 --out_dir $OUT
-python run_baseline.py --model Qwen/Qwen2.5-7B-Instruct --dataset multijail --limit 3 --out_dir $OUT
-python run_baseline.py --model Qwen/Qwen2.5-7B-Instruct --dataset xstest --limit 3 --out_dir $OUT
-python run_baseline.py --model Qwen/Qwen2.5-7B-Instruct --dataset flores --languages zh --limit 3 --out_dir $OUT
+T=/mnt/vstor/courses/csds447/team5/outputs_test
+python run_baseline.py --model Qwen/Qwen2.5-7B-Instruct --dataset multijail --limit 2 --out_dir $T
+python run_baseline.py --model Qwen/Qwen2.5-7B-Instruct --dataset multijail --limit 2 --defense self_reminder --out_dir $T
+python run_baseline.py --model Qwen/Qwen2.5-7B-Instruct --dataset multijail --limit 2 --defense backtranslation --from_responses $T/multijail__none__Qwen2.5-7B-Instruct.jsonl --out_dir $T
+python translate.py --outputs $T/*__*__*.jsonl --out_dir $T/translated
+python judge.py --outputs "$T/translated/*.jsonl" --out_dir $T/judged
+python analyze.py --judged_dir $T/judged --results_dir $T/results
 exit
 ```
-To check outputs
-```
-ls -lh /mnt/vstor/courses/csds447/team5/outputs/
-```
-Type `exit` as soon as it finishes. An idle session still holds one of the class's 6 GPUs.
-The FLORES+ line only works for languages you have downloaded (step 6).
 
-### What `run_baseline.py` does
+This runs every step of the pipeline on 20 prompts and prints the result tables.
 
-1. **Loads the prompts** from the dataset chosen with `--dataset`:
+## 10. Full run (batch jobs)
 
-   | `--dataset` | Prompts | Options |
-   | --- | --- | --- |
-   | `jbb` (default) | JBB-Behaviors | `--split harmful` (default), `benign` or `both` |
-   | `multijail` | MultiJail, one row per prompt per language | `--languages en zh it vi ar ko th bn sw jv` (default: all 10) |
-   | `xstest` | XSTest, safe and unsafe | none |
-   | `flores` | FLORES+ `dev` sentences wrapped in "Translate the following text into English" | `--languages` (English itself is skipped), `--flores_n` (default 200 per language) |
-
-   Each prompt is tagged with `dataset`, `language`, `resource_level`, `label` (safe/unsafe) and
-   `category` (harm type). MultiJail rows also keep the English original (`en_prompt`), and
-   FLORES+ rows keep the English reference translation (`reference_en`) for scoring later.
-   `--prompts file.csv` runs any CSV with `id`, `language` and `prompt` columns instead.
-   `--limit N` keeps the first N prompts per language and label.
-2. **Loads the model onto the GPU** in bfloat16 and prints how many prompts it got per language
-   and which GPU it is on.
-3. **Formats each prompt as a chat message** with the model's own chat template, so the model
-   treats it as a normal user request.
-4. **Generates responses in batches of 8**, up to 256 new tokens each, with greedy decoding
-   (no sampling). The same prompt always gives the same response, so runs are reproducible.
-5. **Saves the results** to `outputs/<dataset>__<model>.jsonl` (for example
-   `multijail__Qwen2.5-7B-Instruct.jsonl`), one JSON line per prompt with all its tags, the model
-   name and the `response`. It writes after every batch, so a crash keeps finished work.
-
-It does not yet judge whether a response is a refusal or harmful; that scoring step comes next.
-
-Expected output for the MultiJail line:
-
-```
-30 prompts from multijail (en=3, zh=3, it=3, vi=3, ar=3, ko=3, th=3, bn=3, sw=3, jv=3) | model Qwen/Qwen2.5-7B-Instruct | GPU: NVIDIA GeForce RTX 4090
-Loading checkpoint shards: 100%|████████████████| 4/4
-8/30 done (5s)
-...
-30/30 done (19s)
-Saved /mnt/vstor/courses/csds447/team5/outputs/multijail__Qwen2.5-7B-Instruct.jsonl
-```
-
-To read the responses (back on the login node):
-
-```bash
-python -c "import json; [print(r['language'], r['id'], '|', r['prompt'][:60], '\n  ->', r['response'][:150].replace('\n',' '), '\n') for r in map(json.loads, open('/mnt/vstor/courses/csds447/team5/outputs/multijail__Qwen2.5-7B-Instruct.jsonl'))]"
-```
-
-### Full run: all three models (batch job)
+Three jobs. Submit them from the repo folder on the login node:
 
 ```bash
 cd ~/project
 mkdir -p logs
-sbatch run_models.sh --dataset multijail
-sbatch run_models.sh --dataset xstest
-sbatch run_models.sh --dataset jbb --split both
+sbatch jobs/validate.sh                    # judge + translation validation, ~30 min
+sbatch jobs/generate.sh                    # all models x defenses x datasets, ~2-3 h (3 GPUs)
 ```
 
-Each `sbatch` submits one job per model in `models.txt`, each on its own GPU, with at most 2
-running at once so the class's shared GPUs stay available. Everything after `run_models.sh` is
-passed to `run_baseline.py`.
-
-Check progress and results:
+`jobs/generate.sh` prints a job ID. When it finishes, run the evaluation (or chain it right away
+with the ID so it starts by itself):
 
 ```bash
-squeue -u $USER
-tail logs/*.out
-ls -lh /mnt/vstor/courses/csds447/team5/outputs/
+sbatch --dependency=afterok:<generate job ID> jobs/evaluate.sh   # translate + judge + tables, ~1-1.5 h
 ```
 
-A job showing `Pending` with reason `AssocGrpGRES` means the class's GPUs are all in use. It
-starts on its own when one frees up.
+| Job | What it runs | Writes |
+| --- | --- | --- |
+| `validate.sh` | `translate.py --validate`, `judge.py --validate` | `results/translation_validation.csv`, `results/judge_validation.csv` |
+| `generate.sh` | One GPU per model: vanilla and Self-Reminder on MultiJail (3,150), XSTest (450), JBB (200); Backtranslation on MultiJail (500), XSTest, JBB | `outputs/<dataset>__<defense>__<model>.jsonl` |
+| `evaluate.sh` | Translate every response into English, judge it, build tables | `outputs/translated/`, `outputs/judged/`, `results/` |
 
-## 9. Demo: every model on every dataset (about 8 minutes)
+Check progress with `squeue -u $USER` and `tail -f logs/*.out`. A run that stops (time limit,
+crash) can be resubmitted: finished prompts are skipped. To run a smaller MultiJail set:
+`LIMIT=100 sbatch jobs/generate.sh` (100 prompts per language).
 
-Inside a GPU session (the `srun` and setup lines from step 8), this runs all three models on one
-prompt per language and label from each dataset: 15 prompts per model.
+## 11. Results and metrics
+
+`analyze.py` writes `results/summary.md` with every table, plus CSVs and plots:
+
+| Metric | Kind | Definition |
+| --- | --- | --- |
+| Agreement, precision, recall, F1, FPR, FNR, Cohen's κ | Standard | Judge vs. human majority on JBB `judge_comparison` |
+| chrF++, BLEU | Standard | NLLB translation vs. FLORES+ human references (NLLB paper's settings) |
+| Attack success rate (ASR) | Standard / RAI | % of harmful prompts with an unsafe response (Llama Guard 3) |
+| Over-refusal | RAI (utility cost) | % of safe prompts refused (XSTest safe, JBB benign) |
+| English gap | RAI (fairness across languages) | average non-English ASR − English ASR |
+| Worst-language ASR | RAI (worst group) | highest ASR of any language |
+| ASR by resource level | RAI (subgroups) | high / medium / low-resource averages |
+| Cross-lingual consistency | RAI | % of non-English prompts with the same safe/unsafe verdict as English |
+| ASR by harm category | Subgroup analysis | MultiJail `tags` × resource level |
+| Language fidelity | RAI | % of responses written in the prompt's language |
+
+The results are committed to this repository under `results/`. To copy them from Markov to your
+computer and commit them, run on your own computer:
 
 ```bash
-for m in $(cat models.txt); do for d in jbb multijail xstest flores; do python run_baseline.py --model $m --dataset $d --split both --languages zh --limit 1 --out_dir $OUT $( [ $d = multijail ] && echo "--languages en zh it vi ar ko th bn sw jv" ); done; done
+scp -r <caseID>@markov.case.edu:~/project/results .
+git add results && git commit -m "Add results" && git push
 ```
-
-It writes 12 files to the outputs folder, one per model and dataset. List them with:
-
-```bash
-ls -lh $OUT
-```
-
 
 ## Storage and etiquette
 

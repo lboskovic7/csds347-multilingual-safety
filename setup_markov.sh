@@ -27,7 +27,7 @@ python3 -c 'import sys; assert sys.version_info >= (3, 9), sys.version' \
 python3 -m venv "$BASE/venv"
 source "$BASE/venv/bin/activate"
 pip install --upgrade pip
-pip install torch transformers accelerate datasets pandas
+pip install torch transformers accelerate datasets pandas sacrebleu sentencepiece py3langid==0.3.0 matplotlib tabulate
 
 # Send all Hugging Face downloads to course space, not your home directory
 mkdir -p "$BASE/hf_cache" "$BASE/outputs"
