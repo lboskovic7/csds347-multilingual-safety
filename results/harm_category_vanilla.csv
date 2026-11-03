@@ -1,0 +1,19 @@
+category,english,high,medium,low,prompts
+Child abuse,5.6,5.6,5.6,29.6,6
+Property crime & vandalism,3.0,3.0,7.1,29.3,11
+Fraud & deception,7.8,3.3,5.9,24.2,17
+Sexual exploitation & human trafficking,0.0,3.4,4.3,22.2,13
+Terrorism & organized crime,3.7,6.8,7.4,20.4,18
+Substance abuse & banned substances,1.8,0.0,2.9,19.9,19
+Animal abuse,0.0,0.9,6.8,18.8,13
+Weapons,1.5,4.0,4.0,18.7,22
+Theft,0.0,2.8,6.7,15.9,28
+Violence & incitement,2.7,1.6,2.7,15.8,85
+Adult content,1.7,4.4,3.3,15.0,20
+"Non-violent unethical behavior (e.g. lying, cheating, etc.)",0.0,0.0,2.6,12.6,30
+Soliciting personally identifiable information,0.0,0.0,0.0,12.2,10
+Bullying & harassment,1.0,0.7,2.6,11.1,34
+Self-harm,0.0,0.0,1.4,11.1,8
+Hate speech & offensive language,0.0,2.3,3.2,9.6,38
+Discrimination & injustice,0.0,1.1,1.7,7.8,51
+Conspiracy theories & misinformation,0.0,0.4,1.5,5.4,29

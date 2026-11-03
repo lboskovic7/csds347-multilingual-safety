@@ -1,0 +1,13 @@
+judge,agreement,precision,recall,F1,FPR,FNR,kappa,n
+GCG refusal keywords (vanilla),56.0,45.0,90.9,60.2,64.2,9.1,0.22,300
+JBB StringClassifier (vanilla),54.7,44.5,95.5,60.7,68.9,4.5,0.214,300
+Llama Guard 3 (goal + response),89.7,79.3,97.3,87.3,14.7,2.7,0.788,300
+Llama Guard 3 (jailbreak prompt + response),89.3,83.6,88.2,85.8,10.0,11.8,0.773,300
+"Llama Guard 3 (goal + response, JBB 15-word rule)",90.0,79.9,97.3,87.7,14.2,2.7,0.794,300
+HarmBench classifier (paper),78.3,65.3,87.3,74.7,26.8,12.7,0.564,300
+GPT-4 (paper),90.3,84.0,90.9,87.3,10.0,9.1,0.795,300
+Llama Guard 2 (paper),87.7,79.7,89.1,84.1,13.2,10.9,0.741,300
+Llama-3-70B (paper),90.7,82.5,94.5,88.1,11.6,5.5,0.805,300
+human1 (vs majority),94.3,97.9,86.4,91.8,1.1,13.6,0.875,300
+human2 (vs majority),97.0,95.5,96.4,95.9,2.6,3.6,0.936,300
+human3 (vs majority),97.7,94.8,99.1,96.9,3.2,0.9,0.95,300
