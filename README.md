@@ -14,6 +14,8 @@ CSDS 347, Team 5: Luka Boskovic (lxb451), Jiye Yong (jxy1203)
 | `common.py` | Shared helpers, including the published keyword lists copied from the authors' code |
 | `jobs/` | Slurm batch jobs: `generate.sh`, `validate.sh`, `evaluate.sh` |
 | `models.txt` | The three models we evaluate, one per line |
+| `models_demo3.txt` | Demo 3 target model (Qwen2.5-3B) |
+| `self_align.py` | Demo 3: builds the self-alignment training data and trains the LoRA adapter |
 | `results/` | Committed results: `summary.md` (all tables), CSVs and plots |
 
 ## Requirements
@@ -299,6 +301,53 @@ computer and commit them, run on your own computer:
 scp -r <caseID>@markov.case.edu:~/project/results .
 git add results && git commit -m "Add results" && git push
 ```
+
+## Demo 3: cross-lingual self-alignment on Qwen2.5-3B
+
+**Question.** Demo 2 showed Qwen2.5-7B refuses harmful requests in English (1.9% attack success)
+but not in low-resource languages (Swahili 46%). Does a smaller model in the same family show the
+same gap, and can we close it without making the model refuse harmless requests?
+
+**Our approach (new compared with the baselines).** `self_align.py` trains a small LoRA adapter
+that teaches the model to apply its *own* English refusals in the 9 other languages:
+
+1. Harmful prompts from AdvBench (never MultiJail; overlaps with JBB are removed) and harmless
+   prompts from Alpaca.
+2. The model answers the English prompts. Only harmful prompts it refuses in English are kept.
+3. NLLB-200 (validated in Demo 2) translates the harmful prompts and the model's refusals into
+   each language. The model answers the translated harmless prompts itself, so its normal
+   behavior is part of the training data and is preserved.
+4. LoRA fine-tuning: rank 16, alpha 32, 1 epoch, learning rate 2e-4, loss on responses only.
+
+It is an open-model version of MultiJail's Self-Defence (which fine-tuned ChatGPT), and it uses
+no outside teacher: distilling a stronger model's refusals made small models *less* safe in
+prior work (Response-Based Knowledge Distillation for Multilingual Jailbreak Prevention, NeurIPS 2025).
+
+**One-time preparation** (login node, environment active):
+
+```bash
+pip install peft
+hf download Qwen/Qwen2.5-3B-Instruct
+python -c "from datasets import load_dataset as L; L('walledai/AdvBench'); L('tatsu-lab/alpaca')"
+```
+
+AdvBench is gated: accept its terms at https://huggingface.co/datasets/walledai/AdvBench first.
+
+**Run** (from the repo folder, `mkdir -p logs` first):
+
+```bash
+# baselines on Qwen2.5-3B: vanilla, Self-Reminder, Backtranslation (Llama Guard filter comes from vanilla)
+MODELS_FILE=models_demo3.txt sbatch --array=1 jobs/generate.sh
+# our approach: train the adapter, then run the adapted model on the same data
+sbatch jobs/self_align.sh
+# when both finish: translate + judge only the new files, tables into results/demo3
+RESULTS=results/demo3 sbatch --dependency=afterany:<generate ID>:<self_align ID> jobs/evaluate.sh
+```
+
+`results/demo3/summary.md` then has every defense, including "Self-alignment (ours)", side by side
+on the same prompts: attack success per language and resource level, over-refusal on XSTest and
+JBB benign, cross-lingual consistency and harm categories. The Demo 2 models appear in the same
+tables for the size comparison (Qwen2.5-3B vs 7B).
 
 ## Storage and etiquette
 

@@ -17,6 +17,7 @@ export HF_HOME=$BASE/hf_cache HF_HUB_OFFLINE=1
 umask 007
 OUT=$BASE/outputs
 nvidia-smi -L
-python translate.py --outputs $OUT/*__*__*.jsonl
-python judge.py --outputs "$OUT/translated/*.jsonl"
-python analyze.py
+# --skip_existing: files translated/judged in an earlier run are not redone
+python translate.py --skip_existing --outputs $OUT/*__*__*.jsonl
+python judge.py --skip_existing --outputs "$OUT/translated/*.jsonl"
+python analyze.py --results_dir ${RESULTS:-results}

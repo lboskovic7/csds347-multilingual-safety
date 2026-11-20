@@ -22,9 +22,9 @@ import pandas as pd
 from common import BASE, LANGS
 
 ORDER = list(LANGS)
-DEFENSES = ["none", "self_reminder", "backtranslation", "llamaguard_filter"]
+DEFENSES = ["none", "self_reminder", "backtranslation", "llamaguard_filter", "self_align"]
 NAMES = {"none": "Vanilla (no defense)", "self_reminder": "Self-Reminder",
-         "backtranslation": "Backtranslation", "llamaguard_filter": "Llama Guard filter"}
+         "backtranslation": "Backtranslation", "llamaguard_filter": "Llama Guard filter", "self_align": "Self-alignment (ours)"}
 
 
 def load(judged_dir):

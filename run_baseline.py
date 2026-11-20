@@ -13,6 +13,8 @@ Defenses (--defense):
   backtranslation Wang et al. 2024 (ACL Findings). Logic, prompt, -2.0 likelihood threshold and
                   150-token lengths copied from llm_jailbreaking_defense/defenses/backtranslation.py.
                   The target model itself does the backtranslation (the library supports this).
+  self_align      Our approach (Demo 3): the vanilla model plus a LoRA adapter trained by self_align.py.
+                  Requires --adapter <folder>. Generation is otherwise identical to `none`.
 (The Llama Guard input/output filter defense needs no new generations; judge.py computes it.)
 
 Output: <out_dir>/<dataset>__<defense>__<model>.jsonl, one JSON line per prompt.
@@ -210,7 +212,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--model", required=True)
     ap.add_argument("--dataset", default="jbb", choices=["jbb", "multijail", "xstest", "flores"])
-    ap.add_argument("--defense", default="none", choices=["none", "self_reminder", "backtranslation"])
+    ap.add_argument("--defense", default="none", choices=["none", "self_reminder", "backtranslation", "self_align"])
+    ap.add_argument("--adapter", default=None, help="self_align: LoRA adapter folder from self_align.py")
     ap.add_argument("--split", default="harmful", choices=["harmful", "benign", "both"], help="JBB only")
     ap.add_argument("--languages", nargs="+", default=list(LANGS), choices=list(LANGS),
                     help="MultiJail / FLORES only (default: all 10)")
@@ -236,6 +239,12 @@ def main():
           f"GPU: {torch.cuda.get_device_name(0)}")
 
     tok, model = load_lm(args.model)
+    if args.defense == "self_align":
+        if not args.adapter:
+            raise SystemExit("--defense self_align needs --adapter <folder>")
+        from peft import PeftModel
+        model = PeftModel.from_pretrained(model, args.adapter).eval()
+        print(f"loaded adapter {args.adapter}")
     start = time.time()
 
     if args.defense == "backtranslation":

@@ -32,9 +32,10 @@ class Translator:
         self.bs, self.max_len = batch_size, max_len
         self.eng = self.tok.convert_tokens_to_ids("eng_Latn")
 
-    def __call__(self, texts, src, beams=1):
-        """Translate a list of strings from NLLB language code `src` into English."""
+    def __call__(self, texts, src, beams=1, tgt="eng_Latn"):
+        """Translate a list of strings from NLLB language code `src` into `tgt` (English by default)."""
         self.tok.src_lang = src
+        bos = self.tok.convert_tokens_to_ids(tgt)
         order = sorted(range(len(texts)), key=lambda i: len(texts[i]))
         out = [None] * len(texts)
         for s in range(0, len(order), self.bs):
@@ -42,7 +43,7 @@ class Translator:
             enc = self.tok([texts[i] for i in idx], return_tensors="pt", padding=True,
                            truncation=True, max_length=self.max_len).to("cuda")
             with self.torch.no_grad():
-                gen = self.model.generate(**enc, forced_bos_token_id=self.eng, num_beams=beams,
+                gen = self.model.generate(**enc, forced_bos_token_id=bos, num_beams=beams,
                                           max_new_tokens=int(self.max_len * 1.5))
             for i, t in zip(idx, self.tok.batch_decode(gen, skip_special_tokens=True)):
                 out[i] = t
@@ -102,11 +103,14 @@ def needs_translation(line, lang):
     return detect(line) != "en"
 
 
-def translate_outputs(tr, paths, out_dir):
+def translate_outputs(tr, paths, out_dir, skip_existing=False):
     os.makedirs(out_dir, exist_ok=True)
     for path in paths:
-        rows = read_jsonl(path)
         target = os.path.join(out_dir, os.path.basename(path))
+        if skip_existing and os.path.exists(target):
+            print(f"{os.path.basename(path)}: already translated, skipping", flush=True)
+            continue
+        rows = read_jsonl(path)
         # collect every non-English line of every response, grouped by source language
         jobs = {}
         for ri, r in enumerate(rows):
@@ -141,13 +145,14 @@ def main():
     ap.add_argument("--results_dir", default="results")
     ap.add_argument("--out_dir", default=os.path.join(BASE, "outputs", "translated"))
     ap.add_argument("--batch_size", type=int, default=32)
+    ap.add_argument("--skip_existing", action="store_true", help="skip files already in --out_dir")
     args = ap.parse_args()
     tr = Translator(batch_size=args.batch_size)
     if args.validate:
         os.makedirs(args.results_dir, exist_ok=True)
         validate(tr, args.results_dir, args.n)
     if args.outputs:
-        translate_outputs(tr, args.outputs, args.out_dir)
+        translate_outputs(tr, args.outputs, args.out_dir, args.skip_existing)
 
 
 if __name__ == "__main__":

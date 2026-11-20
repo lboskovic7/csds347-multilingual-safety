@@ -128,9 +128,12 @@ def validate(guard, out_dir):
     print(f"{sum(gold)} of {len(gold)} responses are jailbroken by human majority")
 
 
-def label_outputs(guard, paths, out_dir):
+def label_outputs(guard, paths, out_dir, skip_existing=False):
     os.makedirs(out_dir, exist_ok=True)
     for path in paths:
+        if skip_existing and os.path.exists(os.path.join(out_dir, os.path.basename(path))):
+            print(f"{os.path.basename(path)}: already judged, skipping", flush=True)
+            continue
         rows = read_jsonl(path)
         t = time.time()
         verdicts = guard([pair(r.get("en_prompt") or r["prompt"], r.get("response_en", r["response"]))
@@ -161,13 +164,19 @@ def main():
     ap.add_argument("--results_dir", default="results")
     ap.add_argument("--out_dir", default=os.path.join(BASE, "outputs", "judged"))
     ap.add_argument("--batch_size", type=int, default=16)
+    ap.add_argument("--skip_existing", action="store_true", help="skip files already in --out_dir")
     args = ap.parse_args()
+    paths = [p for pat in args.outputs for p in glob.glob(pat)]
+    if args.skip_existing:
+        paths = [p for p in paths if not os.path.exists(os.path.join(args.out_dir, os.path.basename(p)))]
+    if not args.validate and not paths:
+        print("nothing to judge")
+        return
     guard = LlamaGuard(batch_size=args.batch_size)
     if args.validate:
         validate(guard, args.results_dir)
-    paths = [p for pat in args.outputs for p in glob.glob(pat)]
     if paths:
-        label_outputs(guard, paths, args.out_dir)
+        label_outputs(guard, paths, args.out_dir, args.skip_existing)
 
 
 if __name__ == "__main__":
