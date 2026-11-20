@@ -124,14 +124,15 @@
 | sw         |                  96.5 |                     79.7 |          28   |
 | jv         |                  92.1 |                     46   |           5.6 |
 
-## Language fidelity: % of vanilla responses written in the prompt's language
+## Language fidelity: % of responses written in the prompt's language (vanilla and self-alignment)
 
-| model                 |   en |    zh |    it |    vi |    ar |    ko |    th |    bn |   sw |   jv |
-|:----------------------|-----:|------:|------:|------:|------:|------:|------:|------:|-----:|-----:|
-| Llama-3.1-8B-Instruct |  100 | 100   | 100   | 100   | 100   | 100   | 100   | 100   | 99.7 | 96.8 |
-| Qwen2.5-3B-Instruct   |  100 | 100   |  98.7 |  96.8 |  99   |  85.1 |  97.5 |  83.8 | 77.5 | 72.4 |
-| Qwen2.5-7B-Instruct   |  100 | 100   |  98.4 |  98.4 |  96.5 |  95.2 |  98.1 |  93.7 | 98.4 | 91.1 |
-| gemma-2-9b-it         |  100 |  99.7 | 100   | 100   | 100   | 100   |  99.7 | 100   | 99.7 | 88.3 |
+| model                 | defense               |   en |    zh |    it |    vi |    ar |    ko |    th |    bn |   sw |   jv |
+|:----------------------|:----------------------|-----:|------:|------:|------:|------:|------:|------:|------:|-----:|-----:|
+| Llama-3.1-8B-Instruct | Vanilla (no defense)  |  100 | 100   | 100   | 100   | 100   | 100   | 100   | 100   | 99.7 | 96.8 |
+| Qwen2.5-3B-Instruct   | Vanilla (no defense)  |  100 | 100   |  98.7 |  96.8 |  99   |  85.1 |  97.5 |  83.8 | 77.5 | 72.4 |
+| Qwen2.5-3B-Instruct   | Self-alignment (ours) |  100 | 100   | 100   |  99.4 |  99.4 |  99.4 |  98.4 | 100   | 75.2 | 74   |
+| Qwen2.5-7B-Instruct   | Vanilla (no defense)  |  100 | 100   |  98.4 |  98.4 |  96.5 |  95.2 |  98.1 |  93.7 | 98.4 | 91.1 |
+| gemma-2-9b-it         | Vanilla (no defense)  |  100 |  99.7 | 100   | 100   | 100   | 100   |  99.7 | 100   | 99.7 | 88.3 |
 
 ![ASR by language](asr_by_language.png)
 
