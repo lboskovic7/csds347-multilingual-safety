@@ -121,6 +121,8 @@ def generate(model, tok, texts, max_new_tokens, batch_size, on_batch=None):
 def load_lm(name):
     import torch
     from transformers import AutoTokenizer, AutoModelForCausalLM
+    if not torch.cuda.is_available() and not os.environ.get("ALLOW_CPU"):
+        raise SystemExit("No usable GPU (torch.cuda.is_available() is False). Resubmit on another node.")
     tok = AutoTokenizer.from_pretrained(name)
     tok.padding_side = "left"
     if tok.pad_token is None:

@@ -104,6 +104,9 @@ def train(args, tok, model, rows):
         r=16, lora_alpha=32, lora_dropout=0.05, task_type="CAUSAL_LM",
         target_modules=["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]))
     model.print_trainable_parameters()
+    model.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
+    model.enable_input_require_grads()
+    model.config.use_cache = False
 
     def encode(r):
         prompt = chat_text(tok, r["prompt"])
@@ -117,24 +120,33 @@ def train(args, tok, model, rows):
     random.Random(args.seed).shuffle(data)
     opt = torch.optim.AdamW([p for p in model.parameters() if p.requires_grad], lr=args.lr)
     steps = (len(data) + args.train_batch - 1) // args.train_batch
+    micro = max(1, min(args.micro_batch, args.train_batch))
     sched = torch.optim.lr_scheduler.LambdaLR(opt, lambda s: min(1.0, (s + 1) / 20) * max(0.0, 1 - s / steps))
     model.train()
     t = time.time()
+    dev = model.device if hasattr(model, "device") else "cuda"
     for step in range(steps):
         batch = data[step * args.train_batch:(step + 1) * args.train_batch]
-        width = max(len(i) for i, _ in batch)
-        ids = torch.full((len(batch), width), tok.pad_token_id)
-        lab = torch.full((len(batch), width), -100)
-        att = torch.zeros((len(batch), width), dtype=torch.long)
-        for k, (i, l) in enumerate(batch):
-            ids[k, :len(i)] = torch.tensor(i); lab[k, :len(l)] = torch.tensor(l); att[k, :len(i)] = 1
-        dev = model.device if hasattr(model, "device") else "cuda"
-        loss = model(input_ids=ids.to(dev), attention_mask=att.to(dev), labels=lab.to(dev)).loss
-        loss.backward()
+        n_tok = sum(sum(x != -100 for x in l) for _, l in batch)   # response tokens in this step
+        total = 0.0
+        for m in range(0, len(batch), micro):                     # gradient accumulation
+            part = batch[m:m + micro]
+            width = max(len(i) for i, _ in part)
+            ids = torch.full((len(part), width), tok.pad_token_id)
+            lab = torch.full((len(part), width), -100)
+            att = torch.zeros((len(part), width), dtype=torch.long)
+            for k, (i, l) in enumerate(part):
+                ids[k, :len(i)] = torch.tensor(i); lab[k, :len(l)] = torch.tensor(l); att[k, :len(i)] = 1
+            out = model(input_ids=ids.to(dev), attention_mask=att.to(dev), labels=lab.to(dev))
+            part_tok = sum(sum(x != -100 for x in l) for _, l in part)
+            loss = out.loss * part_tok / max(n_tok, 1)            # token-weighted, same as one big batch
+            loss.backward()
+            total += loss.item()
+            del out, loss
         torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
         opt.step(); sched.step(); opt.zero_grad()
         if step % 20 == 0 or step == steps - 1:
-            print(f"step {step + 1}/{steps} loss {loss.item():.3f} ({time.time() - t:.0f}s)", flush=True)
+            print(f"step {step + 1}/{steps} loss {total:.3f} ({time.time() - t:.0f}s)", flush=True)
     return model
 
 
@@ -145,7 +157,8 @@ def main():
     ap.add_argument("--n_benign", type=int, default=300)
     ap.add_argument("--max_new_tokens", type=int, default=150)
     ap.add_argument("--batch_size", type=int, default=48, help="generation / translation batch")
-    ap.add_argument("--train_batch", type=int, default=16)
+    ap.add_argument("--train_batch", type=int, default=16, help="examples per optimizer step")
+    ap.add_argument("--micro_batch", type=int, default=4, help="examples per forward pass (memory)")
     ap.add_argument("--max_len", type=int, default=512)
     ap.add_argument("--lr", type=float, default=2e-4)
     ap.add_argument("--seed", type=int, default=0)
