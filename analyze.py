@@ -17,7 +17,7 @@ Definitions (every rate is a percentage of prompts):
                              Llama Guard input filter (on the prompt) or output filter (on the
                              response) flags it, both on the original-language text.
 """
-import argparse, glob, json, os
+import argparse, glob, json, os, re
 import pandas as pd
 from common import BASE, LANGS
 
@@ -120,12 +120,92 @@ def judge_gap_table(mj):
 
 
 def fidelity_table(mj):
-    v = mj[mj["defense"] == "none"]
+    v = mj[mj["defense"].isin(["none", "self_align"])]
     if "response_lang" not in v:
         return pd.DataFrame()
     v = v.assign(same=v["response_lang"] == v["language"])
-    t = v.pivot_table(index="model", columns="language", values="same", aggfunc="mean") * 100
-    return t[[c for c in ORDER if c in t.columns]].round(1).reset_index()
+    t = v.pivot_table(index=["model", "defense"], columns="language", values="same", aggfunc="mean") * 100
+    t = t[[c for c in ORDER if c in t.columns]].round(1).reset_index()
+    t["defense"] = t["defense"].map(lambda d: NAMES.get(d, d))
+    return t
+
+
+def family_size(model):
+    """('Qwen', 0.5) from 'Qwen2.5-0.5B-Instruct', ('Llama', 8.0) from 'Llama-3.1-8B-Instruct',
+    ('Gemma', 9.0) from 'gemma-2-9b-it'. Returns (None, None) if no size is in the name."""
+    m = re.search(r"-(\d+(?:\.\d+)?)[bB](?=-|$)", model)
+    fam = re.match(r"[A-Za-z]+", model)
+    if not m or not fam:
+        return None, None
+    return fam.group(0).capitalize(), float(m.group(1))
+
+
+def family_table(df):
+    """Vanilla models grouped by family and sorted by size: does safety in each language improve
+    with scale, and does every family follow the same pattern?"""
+    v = df[df["defense"] == "none"]
+    out = []
+    for model, g in v.groupby("model"):
+        fam, size = family_size(model)
+        if fam is None:
+            continue
+        mj = g[g["dataset"] == "multijail"]
+        lang = lambda l: pct(mj[mj["language"] == l]["unsafe"])
+        en = lang("en")
+        non = mj[mj["language"] != "en"]
+        sw = mj[mj["language"] == "sw"]
+        xs, jb = g[g["dataset"] == "xstest"], g[g["dataset"] == "jbb"]
+        out.append({"family": fam, "model": model, "size (B)": size,
+                    "ASR en": en,
+                    "ASR high": pct(mj[mj["resource_level"] == "high"]["unsafe"]),
+                    "ASR medium": pct(mj[mj["resource_level"] == "medium"]["unsafe"]),
+                    "ASR low": pct(mj[mj["resource_level"] == "low"]["unsafe"]),
+                    "English gap": round(pct(non["unsafe"]) - en, 1),
+                    "ASR bn": lang("bn"), "ASR sw": lang("sw"),
+                    "sw fidelity": pct(sw["response_lang"] == "sw") if "response_lang" in sw else float("nan"),
+                    "XSTest over-refusal": pct(xs[xs["label"] == "safe"]["refused"]),
+                    "JBB over-refusal": pct(jb[jb["label"] == "safe"]["refused"])})
+    t = pd.DataFrame(out)
+    return t.sort_values(["family", "size (B)"]).reset_index(drop=True) if len(t) else t
+
+
+FAMILY_COLORS = {"Qwen": "#2a78d6", "Llama": "#eb6834", "Gemma": "#1baf7a"}
+EXTRA_COLORS = ["#eda100", "#e87ba4", "#008300"]
+
+
+def family_plot(t, out_dir):
+    """One panel per metric, one line per family, x = model size (log scale)."""
+    if not len(t):
+        return
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    panels = [("ASR en", "English ASR (%)"), ("ASR low", "Low-resource ASR (%)"),
+              ("ASR sw", "Swahili ASR (%)"), ("ASR bn", "Bengali ASR (%)"),
+              ("sw fidelity", "Swahili fidelity (% answered in Swahili)"),
+              ("XSTest over-refusal", "XSTest over-refusal (%)")]
+    fams = sorted(t["family"].unique(), key=lambda f: (list(FAMILY_COLORS).index(f) if f in FAMILY_COLORS else 99, f))
+    extra = iter(EXTRA_COLORS)
+    color = {f: FAMILY_COLORS.get(f) or next(extra, "#888888") for f in fams}
+    fig, axes = plt.subplots(2, 3, figsize=(13, 7))
+    for ax, (col, title) in zip(axes.flat, panels):
+        for f in fams:
+            g = t[t["family"] == f].dropna(subset=[col])
+            if not len(g):
+                continue
+            ax.plot(g["size (B)"], g[col], marker="o", ms=6, lw=2, color=color[f], label=f)
+        ax.set_xscale("log")
+        ticks = [x for x in (0.5, 1, 2, 4, 8, 16, 32, 64) if t["size (B)"].min() / 1.5 <= x <= t["size (B)"].max() * 1.5]
+        ax.set_xticks(ticks, [f"{x:g}B" for x in ticks], fontsize=8)
+        ax.minorticks_off()
+        ax.set_title(title, fontsize=10); ax.grid(alpha=0.3)
+        ax.spines[["top", "right"]].set_visible(False)
+        ax.set_ylim(bottom=0, top=105 if col == "sw fidelity" else None)
+    for ax in axes[1]:
+        ax.set_xlabel("model size (billions of parameters, log scale)", fontsize=8)
+    axes[0][0].legend(fontsize=8, title="family", title_fontsize=8)
+    fig.suptitle("Vanilla models by family and size (MultiJail, XSTest)", fontsize=11)
+    fig.tight_layout(); fig.savefig(os.path.join(out_dir, "family_scaling.png"), dpi=150)
 
 
 def plots(mj, out_dir):
@@ -144,7 +224,11 @@ def plots(mj, out_dir):
         ax.set_title(m); ax.set_xlabel("language (high → low resource)")
         ax.grid(alpha=0.3)
     axes[0][0].set_ylabel("attack success rate (%)")
-    axes[0][-1].legend(fontsize=8)
+    h = {}
+    for a in axes[0]:
+        for hh, ll in zip(*a.get_legend_handles_labels()):
+            h.setdefault(ll, hh)
+    axes[0][-1].legend(list(h.values()), list(h.keys()), fontsize=8)
     fig.tight_layout(); fig.savefig(os.path.join(out_dir, "asr_by_language.png"), dpi=150)
 
     fig, ax = plt.subplots(figsize=(7, 4))
@@ -194,11 +278,13 @@ def main():
         "harm_category_vanilla": category_table(mj),
         "keyword_vs_llamaguard": judge_gap_table(mj),
         "language_fidelity": fidelity_table(mj),
+        "model_family_scaling": family_table(df),
     }
     tables = {k: ordered(v) for k, v in tables.items()}
     for name, t in tables.items():
         t.to_csv(R(f"{name}.csv"), index=False)
     plots(full, args.results_dir)
+    family_plot(tables["model_family_scaling"], args.results_dir)
 
     parts = ["# Results\n"]
     for name, title in [("judge_validation", "Judge validation (JailbreakBench judge_comparison, 300 human-labeled responses)"),
@@ -212,11 +298,14 @@ def main():
         "over_refusal": "Over-refusal and English ASR (XSTest, JailbreakBench)",
         "harm_category_vanilla": "Vanilla ASR (%) by harm category and resource level (all models)",
         "keyword_vs_llamaguard": "Error analysis: keyword judge vs Llama Guard 3 (vanilla, % jailbroken)",
-        "language_fidelity": "Language fidelity: % of vanilla responses written in the prompt's language",
+        "language_fidelity": "Language fidelity: % of responses written in the prompt's language (vanilla and self-alignment)",
+        "model_family_scaling": "Model families by size (vanilla): ASR %, Swahili fidelity %, over-refusal %",
     }
     for name, title in titles.items():
         parts += [f"## {title}\n", md(tables[name]), ""]
     parts += ["![ASR by language](asr_by_language.png)\n", "![ASR by resource level](asr_by_resource_level.png)\n"]
+    if len(tables["model_family_scaling"]):
+        parts += ["![Model families by size](family_scaling.png)\n"]
     with open(R("summary.md"), "w") as f:
         f.write("\n".join(parts))
     print("\n".join(parts))

@@ -15,6 +15,8 @@ CSDS 347, Team 5: Luka Boskovic (lxb451), Jiye Yong (jxy1203)
 | `jobs/` | Slurm batch jobs: `generate.sh`, `validate.sh`, `evaluate.sh` |
 | `models.txt` | The three models we evaluate, one per line |
 | `models_demo3.txt` | Demo 3 target model (Qwen2.5-3B) |
+| `models_scaling.txt` | Other Qwen2.5 sizes (0.5B, 1.5B, 14B) for the family comparison |
+| `models_families.txt` | Llama 3.2 (1B, 3B) and Gemma-2 (2B, 27B) for the family comparison |
 | `self_align.py` | Demo 3: builds the self-alignment training data and trains the LoRA adapter |
 | `results/` | Committed results: `summary.md` (all tables), CSVs and plots |
 
@@ -348,6 +350,37 @@ RESULTS=results/demo3 sbatch --dependency=afterany:<generate ID>:<self_align ID>
 on the same prompts: attack success per language and resource level, over-refusal on XSTest and
 JBB benign, cross-lingual consistency and harm categories. The Demo 2 models appear in the same
 tables for the size comparison (Qwen2.5-3B vs 7B).
+
+## Model families by size (vanilla)
+
+Does multilingual safety improve with scale, and does every family follow the same pattern? Each
+family is run vanilla (no defense) on MultiJail, XSTest and JBB at several sizes. With the Demo 2
+models (Qwen2.5-7B, Llama-3.1-8B, gemma-2-9b) and Demo 3 (Qwen2.5-3B) this gives:
+
+| Family | Sizes | Model list |
+|---|---|---|
+| Qwen2.5 | 0.5B, 1.5B, 3B, 7B, 14B | `models_scaling.txt` (+ Demo 2/3) |
+| Llama | 3.2-1B, 3.2-3B, 3.1-8B | `models_families.txt` lines 1-2 (+ Demo 2) |
+| Gemma-2 | 2B, 9B, 27B | `models_families.txt` lines 3-4 (+ Demo 2) |
+
+Llama 3.2 (1B, 3B) is a newer release than Llama 3.1 (8B); Llama has no 3.1 model smaller than 8B.
+gemma-2-27b needs two GPUs (about 54 GB in bf16), so it runs as its own task.
+
+```bash
+hf download meta-llama/Llama-3.2-1B-Instruct   # gated: request access on the model page first
+hf download meta-llama/Llama-3.2-3B-Instruct
+hf download google/gemma-2-2b-it
+hf download google/gemma-2-27b-it               # ~55 GB: check quotagrp csds447 first
+# one GPU each for the three small models, two L40S for gemma-2-27b
+MODELS_FILE=models_families.txt DEFENSES=none BT_LIMIT=0 sbatch --array=1-3 --exclude=class21t jobs/generate.sh
+MODELS_FILE=models_families.txt DEFENSES=none BT_LIMIT=0 BS=32 sbatch --array=4 --gres=gpu:2 -C gpul40s -t 12:00:00 --exclude=class21t jobs/generate.sh
+RESULTS=results/demo3 sbatch --dependency=afterany:<first ID>:<second ID> --exclude=class21t jobs/evaluate.sh
+```
+
+`summary.md` then has a "Model families by size" table (ASR in English, by resource level, in
+Bengali and Swahili; Swahili fidelity; over-refusal) and `family_scaling.png` (one panel per metric,
+one line per family, model size on a log axis). Any model whose name contains its size (`-7B-`,
+`-9b-`) is placed in its family automatically.
 
 ## Storage and etiquette
 
