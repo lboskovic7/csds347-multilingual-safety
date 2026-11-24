@@ -27,7 +27,7 @@ Then evaluate exactly like the baselines:
   python run_baseline.py --model Qwen/Qwen2.5-3B-Instruct --defense self_align --adapter <out_dir> ...
 """
 import argparse, json, os, random, re, time
-from common import LANGS, BASE, chat_text, generate, load_lm, check_rejection, read_jsonl, write_jsonl
+from common import LANGS, BASE, chat_text, generate, load_lm, check_rejection, read_jsonl, write_jsonl, record_timing
 
 
 def norm(t):
@@ -169,6 +169,7 @@ def main():
 
     tok, model = load_lm(args.model)
     data_path = os.path.join(args.out_dir, "train.jsonl")
+    t0 = time.time()
     if os.path.exists(data_path):
         rows, stats = read_jsonl(data_path), {"reused_data": True}
         print(f"reusing {len(rows)} training examples from {data_path}")
@@ -178,8 +179,12 @@ def main():
     stats.update({"examples": len(rows),
                   "harmful": sum(r["kind"] == "harmful" for r in rows),
                   "benign": sum(r["kind"] == "benign" for r in rows), **vars(args)})
+    t1 = time.time()
     model = train(args, tok, model, rows)
     model.save_pretrained(args.out_dir)
+    record_timing(kind="self_align_training", model=args.model, defense="self_align",
+                  data_seconds=round(t1 - t0, 1), train_seconds=round(time.time() - t1, 1),
+                  reused_data=bool(stats.get("reused_data")), examples=len(rows), batch_size=args.batch_size)
     with open(os.path.join(args.out_dir, "stats.json"), "w") as f:
         json.dump(stats, f, indent=2)
     print("Saved adapter to", args.out_dir)

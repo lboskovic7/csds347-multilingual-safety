@@ -3,6 +3,8 @@ batched generation and JSONL input/output."""
 import json, math, os
 
 BASE = os.environ.get("BASE", "/mnt/vstor/courses/csds447/team5")
+# runtime / cost log, one JSON line per run (read by analyze.py)
+TIMING = os.environ.get("TIMING_FILE", os.path.join(BASE, "outputs", "timing.jsonl"))
 
 # MultiJail languages: resource level (from the MultiJail paper), FLORES+ code, NLLB-200 code
 LANGS = {
@@ -130,3 +132,17 @@ def load_lm(name):
     model = AutoModelForCausalLM.from_pretrained(name, dtype=torch.bfloat16, device_map="auto")
     model.eval()
     return tok, model
+
+
+def record_timing(**fields):
+    """Append one line to outputs/timing.jsonl: what ran, how long it took, on which hardware.
+    Peak memory is the most GPU memory the process used (weights + generation), summed over GPUs."""
+    import socket, time, torch
+    n = torch.cuda.device_count()
+    fields.update({"gpu": torch.cuda.get_device_name(0) if n else "cpu", "n_gpus": n,
+                   "peak_mem_gb": round(sum(torch.cuda.max_memory_allocated(i) for i in range(n)) / 1e9, 2),
+                   "host": socket.gethostname(), "slurm_job": os.environ.get("SLURM_JOB_ID"),
+                   "time": time.strftime("%Y-%m-%d %H:%M:%S")})
+    os.makedirs(os.path.dirname(TIMING), exist_ok=True)
+    with open(TIMING, "a") as f:
+        f.write(json.dumps(fields) + "\n")

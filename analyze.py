@@ -19,7 +19,7 @@ Definitions (every rate is a percentage of prompts):
 """
 import argparse, glob, json, os, re
 import pandas as pd
-from common import BASE, LANGS
+from common import BASE, LANGS, TIMING
 
 ORDER = list(LANGS)
 DEFENSES = ["none", "self_reminder", "backtranslation", "llamaguard_filter", "self_align"]
@@ -169,6 +169,185 @@ def family_table(df):
     return t.sort_values(["family", "size (B)"]).reset_index(drop=True) if len(t) else t
 
 
+# --- Runtime and cost ---------------------------------------------------------------------------
+# On-demand price per GPU-hour, RunPod (https://www.runpod.io/pricing), checked Nov 2026.
+# Markov is free to us; this only puts the GPU time in comparable dollar terms.
+PRICE = {"L40S": 1.09, "4090": 0.89}
+
+
+def price(gpu):
+    return next((p for k, p in PRICE.items() if k in str(gpu)), float("nan"))
+
+
+def parse_logs(logs_dir):
+    """Recover timing for runs made before timing.jsonl existed, from the Slurm logs:
+    run_baseline.py prints '<N> prompts from ... | GPU: <name>' then 'Saved <file> (<s>s)'; the
+    jobs print 'GPU k: <name>' (nvidia-smi -L) and '-> batch size B'; judge.py prints
+    '<file>: x/N unsafe (<s>s)'; self_align.py prints 'step k/K loss ... (<s>s)'."""
+    out = []
+    for path in sorted(glob.glob(os.path.join(logs_dir, "*.out"))):
+        gpus, bs, cur, step = [], None, None, None
+        job = re.search(r"-(\d+)(?:_\d+)?\.out$", path)
+        for line in open(path, errors="replace"):
+            line = line.rstrip("\n")
+            if m := re.match(r"GPU (\d+): (.+?) \(UUID", line):
+                gpus = [] if m.group(1) == "0" else gpus
+                gpus.append(m.group(2))
+            elif m := re.search(r"-> batch size (\d+)", line):
+                bs = int(m.group(1))
+            elif m := re.match(r"(\d+) prompts from .*\| model (\S+) \| defense (\S+) \| GPU: (.+)$", line):
+                cur = {"total": int(m.group(1)), "resumed": 0, "gpu": m.group(4)}
+            elif (m := re.match(r"resuming: (\d+) already saved", line)) and cur:
+                cur["resumed"] = int(m.group(1))
+            elif (m := re.match(r"Saved (\S+\.jsonl) \((\d+)s\)", line)) and cur:
+                name = os.path.basename(m.group(1))[:-6]
+                dataset, defense, model = name.split("__")
+                n = cur["total"] - cur["resumed"]
+                if n > 0:
+                    out.append({"kind": "generate", "model": model, "dataset": dataset, "defense": defense,
+                                "prompts": n, "seconds": float(m.group(2)), "gpu": cur["gpu"],
+                                "n_gpus": max(len(gpus), 1), "batch_size": bs, "source": "log",
+                                "reuses_vanilla": defense == "backtranslation"})
+                cur = None
+            elif m := re.match(r"(\S+)__none__(\S+)\.jsonl: \d+/(\d+) unsafe \((\d+)s\)", line):
+                # vanilla files get 3 Llama Guard passes (judge, input filter, output filter): 2/3 is the filter
+                out.append({"kind": "llamaguard_filter", "model": m.group(2), "dataset": m.group(1),
+                            "defense": "llamaguard_filter", "prompts": int(m.group(3)),
+                            "seconds": float(m.group(4)) * 2 / 3, "gpu": gpus[0] if gpus else None,
+                            "n_gpus": max(len(gpus), 1), "source": "log (estimate)"})
+            elif m := re.match(r"step (\d+)/(\d+) loss \S+ \((\d+)s\)", line):
+                step = (int(m.group(1)), int(m.group(2)), float(m.group(3)))
+            elif line.startswith("Saved adapter to") and step and step[0] == step[1]:
+                model = re.search(r"adapters/(.+?)-selfalign", line)
+                out.append({"kind": "self_align_training", "model": model.group(1) if model else "?",
+                            "defense": "self_align", "train_seconds": step[2], "data_seconds": None,
+                            "gpu": gpus[0] if gpus else None, "n_gpus": max(len(gpus), 1),
+                            "source": "log (training only)", "slurm_job": job.group(1) if job else None})
+    return out
+
+
+def load_timing(logs_dir):
+    """timing.jsonl (exact) plus the Slurm logs (older runs); timing.jsonl wins for the same run."""
+    rows = []
+    if os.path.exists(TIMING):
+        with open(TIMING) as f:
+            rows = [dict(json.loads(l), source="timing.jsonl") for l in f if l.strip()]
+    t = pd.DataFrame(rows + (parse_logs(logs_dir) if logs_dir and os.path.isdir(logs_dir) else []))
+    if not len(t):
+        return t
+    t["model"] = t["model"].astype(str).str.split("/").str[-1]
+    for c in ["dataset", "prompts", "seconds", "out_tokens", "peak_mem_gb", "params_b", "batch_size"]:
+        if c not in t:
+            t[c] = None
+    t["exact"] = t["source"] == "timing.jsonl"
+    # per run: keep the exact record if there is one, else the longest logged segment
+    t = t.sort_values(["exact", "prompts"], ascending=False)
+    return t.drop_duplicates(["kind", "model", "dataset", "defense"]).reset_index(drop=True)
+
+
+def cost_table(timing, df, main):
+    """Runtime and cost per 1,000 prompts for each model and defense, next to its safety numbers.
+    Backtranslation reuses the vanilla answer, so its cost is vanilla + the backtranslation step;
+    the Llama Guard filter is vanilla + two Llama Guard 3 (8B) checks per prompt."""
+    if not len(timing):
+        return pd.DataFrame()
+    g = timing[timing["kind"] == "generate"].copy()
+    g["gpu_s"] = g["seconds"] * g["n_gpus"].fillna(1).clip(lower=1)
+    lg = timing[timing["kind"] == "llamaguard_filter"].copy()
+    lg["gpu_s"] = lg["seconds"] * lg["n_gpus"].fillna(1).clip(lower=1)
+    tr = timing[timing["kind"] == "self_align_training"]
+
+    def rate(t):  # GPU-seconds per prompt, and the GPU that did most of the work
+        if not len(t) or t["prompts"].sum() == 0:
+            return None
+        main_gpu = t.sort_values("prompts").iloc[-1]
+        return {"gpu_s": t["gpu_s"].sum() / t["prompts"].sum(), "gpu": main_gpu["gpu"],
+                "n_gpus": int(main_gpu["n_gpus"] or 1), "batch": main_gpu["batch_size"],
+                "exact": bool(t["exact"].all())}
+
+    words = df.assign(w=df["response"].fillna("").str.split().str.len()).groupby(["model", "defense"])["w"].mean()
+    safety = main.set_index(["model", "defense"]) if len(main) else None
+    out = []
+    for m in sorted(g["model"].unique()):
+        van = rate(g[(g["model"] == m) & (g["defense"] == "none")])
+        lgr = rate(lg[lg["model"] == m])
+        for d in DEFENSES:
+            own = rate(g[(g["model"] == m) & (g["defense"] == d)]) if d != "llamaguard_filter" else None
+            if d == "backtranslation" and own and van:
+                r = dict(own, gpu_s=own["gpu_s"] + van["gpu_s"], exact=own["exact"] and van["exact"])
+            elif d == "llamaguard_filter" and van and lgr:
+                r = dict(van, gpu_s=van["gpu_s"] + lgr["gpu_s"], exact=False)
+            else:
+                r = own
+            if not r:
+                continue
+            gt = g[(g["model"] == m) & (g["defense"] == d)]
+            fam, size = family_size(m)
+            row = {"model": m, "defense": NAMES[d],
+                   "GPU": f"{str(r['gpu']).replace('NVIDIA ', '').replace('GeForce ', '')}"
+                          + (f" x{r['n_gpus']}" if r["n_gpus"] > 1 else ""),
+                   "batch": r["batch"], "size (B)": size,
+                   "peak GPU mem (GB)": gt["peak_mem_gb"].max() if gt["peak_mem_gb"].notna().any() else float("nan"),
+                   "GPU-s / 1k prompts": round(1000 * r["gpu_s"]),
+                   "$ / 1k prompts": round(r["gpu_s"] * 1000 / 3600 * price(r["gpu"]), 3),
+                   "vs vanilla": round(r["gpu_s"] / van["gpu_s"], 2) if van else float("nan"),
+                   "words / response": round(words.get((m, d), float("nan")), 0) if d != "llamaguard_filter" else float("nan"),
+                   "one-time GPU-h": float("nan"), "measured": "exact" if r["exact"] else "from logs"}
+            if d == "self_align":
+                t = tr[tr["model"] == m]
+                if len(t):
+                    t = t.iloc[0]
+                    secs = (t["train_seconds"] or 0) + (t["data_seconds"] or 0) if pd.notna(t["data_seconds"]) else t["train_seconds"]
+                    row["one-time GPU-h"] = round(secs * (t["n_gpus"] or 1) / 3600, 2)
+                    if pd.isna(t["data_seconds"]):
+                        row["measured"] += " (training only)"
+            if safety is not None and (m, NAMES[d]) in safety.index:
+                row["ASR low"] = safety.loc[(m, NAMES[d]), "ASR low"]
+                row["ASR non-en"] = safety.loc[(m, NAMES[d]), "ASR non-en"]
+            out.append(row)
+    return pd.DataFrame(out)
+
+
+def cost_plot(cost, refusal, out_dir):
+    """Safety vs cost: x = GPU-seconds per 1,000 prompts (log), y = low-resource ASR and XSTest
+    over-refusal. Lines = vanilla models of one family by size; markers = defenses."""
+    if not len(cost) or "ASR low" not in cost:
+        return
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    c = cost.merge(refusal[["model", "defense", "XSTest over-refusal (safe)"]], on=["model", "defense"], how="left")
+    c["family"] = c["model"].map(lambda m: family_size(m)[0])
+    van = c[c["defense"] == NAMES["none"]].sort_values("size (B)")
+    fams = sorted(van["family"].dropna().unique(), key=lambda f: (list(FAMILY_COLORS).index(f) if f in FAMILY_COLORS else 99, f))
+    extra = iter(EXTRA_COLORS)
+    color = {f: FAMILY_COLORS.get(f) or next(extra, "#888888") for f in fams}
+    marks = {"Self-Reminder": "s", "Backtranslation": "^", "Llama Guard filter": "D", "Self-alignment (ours)": "*"}
+    with_defenses = c[c["defense"] == NAMES["self_align"]]["model"].unique()
+    fig, axes = plt.subplots(1, 2, figsize=(12, 4.8))
+    for ax, col, title in [(axes[0], "ASR low", "Low-resource ASR (%)"),
+                           (axes[1], "XSTest over-refusal (safe)", "XSTest over-refusal (%)")]:
+        for f in fams:
+            v = van[van["family"] == f].dropna(subset=[col])
+            ax.plot(v["GPU-s / 1k prompts"], v[col], marker="o", ms=6, lw=2, color=color[f], label=f"{f} (vanilla)")
+            for _, r in v.iterrows():
+                ax.annotate(f"{r['size (B)']:g}B", (r["GPU-s / 1k prompts"], r[col]), xytext=(4, 4),
+                            textcoords="offset points", fontsize=7, color="#555555")
+        for d, mk in marks.items():
+            v = c[(c["defense"] == d) & c["model"].isin(with_defenses)].dropna(subset=[col])
+            if len(v):
+                ax.scatter(v["GPU-s / 1k prompts"], v[col], marker=mk, s=110 if mk == "*" else 50,
+                           facecolor="white" if mk != "*" else "#d62728", edgecolor="#222222", zorder=3,
+                           label=f"{d} ({', '.join(v['model'])})")
+        ax.set_xscale("log"); ax.set_xlabel("GPU-seconds per 1,000 prompts (log scale)")
+        ax.set_title(title, fontsize=10); ax.grid(alpha=0.3); ax.set_ylim(bottom=0)
+        ax.spines[["top", "right"]].set_visible(False)
+    h, l = axes[0].get_legend_handles_labels()
+    fig.legend(h, l, fontsize=8, loc="lower center", ncol=3, frameon=False)
+    fig.suptitle("Safety vs inference cost", fontsize=11)
+    fig.tight_layout(rect=(0, 0.1, 1, 1)); fig.savefig(os.path.join(out_dir, "cost_vs_safety.png"), dpi=150)
+
+
 FAMILY_COLORS = {"Qwen": "#2a78d6", "Llama": "#eb6834", "Gemma": "#1baf7a"}
 EXTRA_COLORS = ["#eda100", "#e87ba4", "#008300"]
 
@@ -260,6 +439,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--judged_dir", default=os.path.join(BASE, "outputs", "judged"))
     ap.add_argument("--results_dir", default="results")
+    ap.add_argument("--logs", default="logs", help="Slurm logs, for the timing of runs before timing.jsonl")
     args = ap.parse_args()
     os.makedirs(args.results_dir, exist_ok=True)
     R = lambda n: os.path.join(args.results_dir, n)
@@ -280,11 +460,13 @@ def main():
         "language_fidelity": fidelity_table(mj),
         "model_family_scaling": family_table(df),
     }
+    tables["cost"] = cost_table(load_timing(args.logs), df, tables["multijail_main"])
     tables = {k: ordered(v) for k, v in tables.items()}
     for name, t in tables.items():
         t.to_csv(R(f"{name}.csv"), index=False)
     plots(full, args.results_dir)
     family_plot(tables["model_family_scaling"], args.results_dir)
+    cost_plot(tables["cost"], tables["over_refusal"], args.results_dir)
 
     parts = ["# Results\n"]
     for name, title in [("judge_validation", "Judge validation (JailbreakBench judge_comparison, 300 human-labeled responses)"),
@@ -300,12 +482,15 @@ def main():
         "keyword_vs_llamaguard": "Error analysis: keyword judge vs Llama Guard 3 (vanilla, % jailbroken)",
         "language_fidelity": "Language fidelity: % of responses written in the prompt's language (vanilla and self-alignment)",
         "model_family_scaling": "Model families by size (vanilla): ASR %, Swahili fidelity %, over-refusal %",
+        "cost": "Runtime and cost per 1,000 prompts (GPU-seconds; $ at RunPod on-demand rates: L40S $1.09/h, RTX 4090 $0.89/h)",
     }
     for name, title in titles.items():
         parts += [f"## {title}\n", md(tables[name]), ""]
     parts += ["![ASR by language](asr_by_language.png)\n", "![ASR by resource level](asr_by_resource_level.png)\n"]
     if len(tables["model_family_scaling"]):
         parts += ["![Model families by size](family_scaling.png)\n"]
+    if len(tables["cost"]):
+        parts += ["![Safety vs cost](cost_vs_safety.png)\n"]
     with open(R("summary.md"), "w") as f:
         f.write("\n".join(parts))
     print("\n".join(parts))

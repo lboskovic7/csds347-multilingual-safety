@@ -22,7 +22,8 @@
 """
 import argparse, glob, os, time
 import pandas as pd
-from common import BASE, read_jsonl, write_jsonl, gcg_jailbroken, jbb_string_jailbroken, check_rejection
+from common import (BASE, read_jsonl, write_jsonl, gcg_jailbroken, jbb_string_jailbroken, check_rejection,
+                    record_timing)
 
 GUARD = "meta-llama/Llama-Guard-3-8B"
 
@@ -146,11 +147,15 @@ def label_outputs(guard, paths, out_dir, skip_existing=False):
             r["gcg_jailbroken"] = gcg_jailbroken(en)
             r["words"] = len((r["response"] or "").split())
         if all(r.get("defense", "none") == "none" for r in rows):
+            t_f = time.time()
             inp = guard([[{"role": "user", "content": r["prompt"]}] for r in rows])
             outp = guard([pair(r["prompt"], r["response"]) for r in rows])
             for r, a, b in zip(rows, inp, outp):
                 r["lg_input_flag"] = is_unsafe(a)
                 r["lg_output_flag"] = is_unsafe(b)
+            record_timing(kind="llamaguard_filter", model=rows[0].get("model"),
+                          dataset=os.path.basename(path).split("__")[0], defense="llamaguard_filter",
+                          prompts=len(rows), seconds=round(time.time() - t_f, 1), batch_size=guard.bs)
         target = os.path.join(out_dir, os.path.basename(path))
         write_jsonl(target, rows)
         print(f"{os.path.basename(path)}: {sum(r['lg_unsafe'] for r in rows)}/{len(rows)} unsafe "

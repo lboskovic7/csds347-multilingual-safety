@@ -371,8 +371,8 @@ hf download meta-llama/Llama-3.2-1B-Instruct   # gated: request access on the mo
 hf download meta-llama/Llama-3.2-3B-Instruct
 hf download google/gemma-2-2b-it
 hf download google/gemma-2-27b-it               # ~55 GB: check quotagrp csds447 first
-# one GPU each for the three small models, two L40S for gemma-2-27b
-MODELS_FILE=models_families.txt DEFENSES=none BT_LIMIT=0 sbatch --array=1-3 --exclude=class21t jobs/generate.sh
+# one L40S each for the three small models (same GPU as the Qwen runs, so times compare), two for gemma-2-27b
+MODELS_FILE=models_families.txt DEFENSES=none BT_LIMIT=0 BS=48 sbatch --array=1-3 -C gpul40s --exclude=class21t jobs/generate.sh
 MODELS_FILE=models_families.txt DEFENSES=none BT_LIMIT=0 BS=32 sbatch --array=4 --gres=gpu:2 -C gpul40s -t 12:00:00 --exclude=class21t jobs/generate.sh
 RESULTS=results/demo3 sbatch --dependency=afterany:<first ID>:<second ID> --exclude=class21t jobs/evaluate.sh
 ```
@@ -381,6 +381,17 @@ RESULTS=results/demo3 sbatch --dependency=afterany:<first ID>:<second ID> --excl
 Bengali and Swahili; Swahili fidelity; over-refusal) and `family_scaling.png` (one panel per metric,
 one line per family, model size on a log axis). Any model whose name contains its size (`-7B-`,
 `-9b-`) is placed in its family automatically.
+
+### Runtime and cost
+
+Every run appends one line to `$BASE/outputs/timing.jsonl`: GPU type and count, batch size, seconds,
+prompts, output tokens and peak GPU memory (`run_baseline.py`), the Llama Guard input/output checks
+(`judge.py`), and the one-time cost of building the data and training the adapter (`self_align.py`).
+Runs made before this was added are read from the Slurm logs in `logs/` (seconds, GPU, batch size).
+`summary.md` then has a "Runtime and cost" table, GPU-seconds and dollars per 1,000 prompts for each
+model and defense, next to its attack success rate, and `cost_vs_safety.png`. Dollars use RunPod
+on-demand prices (L40S $1.09/h, RTX 4090 $0.89/h, Nov 2026; `PRICE` in `analyze.py`). Markov
+itself is free to us. Speed depends on the GPU, so compare models run on the same GPU type.
 
 ## Storage and etiquette
 

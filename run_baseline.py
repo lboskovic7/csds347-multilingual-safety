@@ -22,7 +22,8 @@ Re-running the same command skips prompts that are already saved (resume after a
 """
 import argparse, ast, math, os, time
 import pandas as pd
-from common import LANGS, BASE, chat_text, generate, load_lm, check_rejection, clean, read_jsonl, write_jsonl
+from common import (LANGS, BASE, chat_text, generate, load_lm, check_rejection, clean, read_jsonl, write_jsonl,
+                    record_timing)
 
 TRANSLATE = "Translate the following text into English. Reply with the translation only.\n\n{text}"
 
@@ -238,6 +239,7 @@ def main():
     print(f"{len(rows)} prompts from {name} ({langs}) | model {args.model} | defense {args.defense} | "
           f"GPU: {torch.cuda.get_device_name(0)}")
 
+    t_load = time.time()
     tok, model = load_lm(args.model)
     if args.defense == "self_align":
         if not args.adapter:
@@ -245,7 +247,11 @@ def main():
         from peft import PeftModel
         model = PeftModel.from_pretrained(model, args.adapter).eval()
         print(f"loaded adapter {args.adapter}")
+    params = sum(p.numel() for p in model.parameters())
     start = time.time()
+    load_seconds = start - t_load
+    tokens = [0]
+    n_run = len(rows)
 
     if args.defense == "backtranslation":
         run_backtranslation(args, tok, model, rows, out_path)
@@ -262,11 +268,20 @@ def main():
             write_jsonl(out_path, [{**rows[i], "model": args.model, "defense": args.defense,
                                     "response": rep} for i, rep in zip(idx, replies)], mode="a")
             count[0] += len(idx)
+            tokens[0] += sum(len(x) for x in tok(replies, add_special_tokens=False).input_ids)
             print(f"{count[0]}/{len(rows)} done ({time.time() - start:.0f}s)", flush=True)
 
         generate(model, tok, texts, args.max_new_tokens, args.batch_size, on_batch=save)
+        n_run = count[0]
 
-    print(f"Saved {out_path} ({time.time() - start:.0f}s)")
+    seconds = time.time() - start
+    print(f"Saved {out_path} ({seconds:.0f}s)")
+    if n_run:
+        record_timing(kind="generate", model=args.model, dataset=name, defense=args.defense,
+                      prompts=n_run, seconds=round(seconds, 1), load_seconds=round(load_seconds, 1),
+                      out_tokens=tokens[0] if args.defense != "backtranslation" else None,
+                      reuses_vanilla=bool(args.from_responses), batch_size=args.batch_size,
+                      max_new_tokens=args.max_new_tokens, params_b=round(params / 1e9, 3))
 
 
 if __name__ == "__main__":
