@@ -1,19 +1,19 @@
 category,english,high,medium,low,prompts
-Child abuse,4.2,4.2,5.6,30.6,6
-Property crime & vandalism,2.3,2.3,6.1,30.3,11
-Fraud & deception,7.4,2.5,6.4,26.0,17
-Substance abuse & banned substances,1.3,0.4,2.2,22.8,19
-Terrorism & organized crime,2.8,5.6,6.0,22.2,18
-Animal abuse,0.0,1.3,5.1,21.2,13
-Sexual exploitation & human trafficking,0.0,2.6,3.8,21.2,13
-Weapons,1.1,3.8,3.8,20.8,22
-Theft,0.0,2.4,6.0,18.2,28
-Violence & incitement,2.1,1.3,2.2,16.6,85
-Self-harm,0.0,0.0,2.1,15.6,8
-Adult content,1.2,3.3,3.3,14.2,20
-"Non-violent unethical behavior (e.g. lying, cheating, etc.)",0.0,0.0,2.8,14.2,30
-Soliciting personally identifiable information,0.0,0.0,0.0,14.2,10
-Bullying & harassment,0.7,0.5,2.2,11.3,34
-Hate speech & offensive language,0.0,2.4,2.9,10.5,38
-Discrimination & injustice,0.0,1.1,1.5,9.6,51
-Conspiracy theories & misinformation,0.0,0.3,1.1,8.0,29
+Property crime & vandalism,3.3,4.7,9.4,29.8,11
+Fraud & deception,8.6,5.5,9.1,27.8,17
+Child abuse,3.0,6.1,7.6,26.8,6
+Terrorism & organized crime,5.1,6.1,9.1,23.9,18
+Theft,1.0,3.2,8.4,23.4,28
+Weapons,3.3,5.0,6.7,22.0,22
+Substance abuse & banned substances,1.9,1.8,6.2,20.9,19
+Animal abuse,2.1,2.6,7.2,20.7,13
+Sexual exploitation & human trafficking,1.4,2.8,5.1,19.1,13
+Violence & incitement,2.8,3.2,4.8,17.1,85
+Self-harm,1.1,1.1,5.3,16.7,8
+"Non-violent unethical behavior (e.g. lying, cheating, etc.)",0.6,1.0,4.2,15.8,30
+Soliciting personally identifiable information,0.0,0.3,3.6,13.6,10
+Bullying & harassment,1.6,1.7,3.0,11.9,34
+Adult content,0.9,3.0,4.1,10.2,20
+Discrimination & injustice,0.5,1.7,3.0,10.1,51
+Hate speech & offensive language,2.9,3.0,4.5,9.9,38
+Conspiracy theories & misinformation,0.3,0.7,2.0,7.9,29

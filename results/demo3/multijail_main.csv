@@ -2,6 +2,16 @@ model,defense,prompts,ASR en,ASR non-en,ASR high,ASR medium,ASR low,English gap,
 Llama-3.1-8B-Instruct,Vanilla (no defense),3150,2.2,9.9,4.0,7.6,18.2,7.7,sw (27.0),89.2,27.4
 Llama-3.1-8B-Instruct,Self-Reminder,3150,0.6,5.1,1.4,2.5,11.5,4.5,sw (19.0),94.6,29.6
 Llama-3.1-8B-Instruct,Llama Guard filter,3150,0.0,2.5,0.4,1.6,5.6,2.5,sw (9.2),97.5,67.7
+Llama-3.2-1B-Instruct,Vanilla (no defense),3150,4.4,17.6,6.6,14.4,31.7,13.2,sw (44.4),81.1,32.0
+Llama-3.2-1B-Instruct,Llama Guard filter,3150,0.0,3.0,0.6,1.7,6.8,3.0,sw (11.1),97.0,71.1
+Llama-3.2-3B-Instruct,Vanilla (no defense),3150,5.7,10.1,4.4,8.5,17.4,4.4,sw (28.6),86.5,34.1
+Llama-3.2-3B-Instruct,Llama Guard filter,3150,0.0,1.6,0.4,0.7,3.7,1.6,sw (6.3),98.4,68.7
+Qwen2.5-0.5B-Instruct,Vanilla (no defense),3150,7.0,16.3,9.6,14.7,24.6,9.3,bn (41.9),82.4,46.1
+Qwen2.5-0.5B-Instruct,Llama Guard filter,3150,0.0,2.0,0.6,1.6,3.9,2.0,sw (5.4),98.0,76.7
+Qwen2.5-1.5B-Instruct,Vanilla (no defense),3150,0.6,8.6,1.4,3.3,21.3,8.0,bn (34.9),91.3,59.8
+Qwen2.5-1.5B-Instruct,Llama Guard filter,3150,0.0,1.3,0.1,0.8,2.9,1.3,sw (4.8),98.7,79.8
+Qwen2.5-14B-Instruct,Vanilla (no defense),3150,1.3,4.8,0.6,0.4,13.3,3.5,sw (28.6),94.3,44.9
+Qwen2.5-14B-Instruct,Llama Guard filter,3150,0.0,0.9,0.0,0.2,2.5,0.9,sw (5.4),99.1,68.9
 Qwen2.5-3B-Instruct,Vanilla (no defense),3150,0.3,7.5,1.0,1.6,20.1,7.2,sw (38.1),92.3,53.4
 Qwen2.5-3B-Instruct,Self-Reminder,3150,1.3,4.1,1.0,1.1,10.4,2.8,sw (18.1),95.0,52.9
 Qwen2.5-3B-Instruct,Llama Guard filter,3150,0.0,1.7,0.3,0.3,4.4,1.7,sw (8.3),98.3,74.7
@@ -11,6 +21,10 @@ Qwen2.5-7B-Instruct,Self-Reminder,3150,0.3,6.9,0.7,1.5,18.6,6.6,sw (42.9),92.9,4
 Qwen2.5-7B-Instruct,Llama Guard filter,3150,0.0,1.9,0.3,0.2,5.2,1.9,sw (10.8),98.1,69.6
 Qwen2.5-7B-Instruct,dual_verify,520,0.0,1.5,0.0,1.5,3.0,1.5,sw (6.7),98.5,69.0
 Qwen2.5-7B-Instruct,regenerate,253,0.0,2.6,0.0,0.0,8.3,2.6,sw (25.0),97.4,34.2
+gemma-2-27b-it,Vanilla (no defense),3150,0.0,0.7,0.4,0.8,0.8,0.7,jv (1.6),99.3,56.8
+gemma-2-27b-it,Llama Guard filter,3150,0.0,0.1,0.0,0.1,0.3,0.1,bn (0.6),99.9,75.4
+gemma-2-2b-it,Vanilla (no defense),3150,0.0,2.5,0.5,2.9,4.2,2.5,sw (7.3),97.5,62.4
+gemma-2-2b-it,Llama Guard filter,3150,0.0,0.7,0.0,0.4,1.6,0.7,sw (3.5),99.3,76.3
 gemma-2-9b-it,Vanilla (no defense),3150,0.0,1.1,0.3,1.0,2.0,1.1,jv (3.2),98.9,59.0
 gemma-2-9b-it,Self-Reminder,3150,0.0,0.2,0.1,0.2,0.2,0.2,bn (0.6),99.8,62.2
 gemma-2-9b-it,Llama Guard filter,3150,0.0,0.2,0.1,0.1,0.5,0.2,jv (1.3),99.8,76.0
